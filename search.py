@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from token import RIGHTSHIFTEQUAL
 from Tkconstants import LEFT
-
+from checkSpelling import checkSpelling
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +35,18 @@ class Indexable(object):
         self.iid = iid
         self.words_count = defaultdict(int)
 
+        lastword = ""
+        for word in metadata.split():
+            if lastword == "":
+                lastword = word
+                continue
+            self.words_count[lastword + '_' + word] += 1
+            lastword = word
         for word in metadata.split():
             self.words_count[word] += 1
 
     def __repr__(self):
-        return ' '.join(self.words_count.keys()[:10])
+        return '_'.join(self.words_count.keys()[:10])
 
     def __eq__(self, other):
         return (isinstance(other, self.__class__)
@@ -58,9 +65,12 @@ class Indexable(object):
           str: Unique words from indexed metadata.
 
         """
+        # ret = []
         for word in self.words_count.keys():
             if word not in stop_words or len(word) > 5:
+                # ret.append(word)
                 yield word
+        # return ret
 
     def count_for_word(self, word):
         """Frequency of a given word from indexed metadata.
@@ -218,6 +228,20 @@ class TfidfRank(object):
 
         """
         vocabulary_index = 0
+        for obj in objects:
+            position = obj.iid
+            word = obj.word
+            lastw = ""
+            for w in word.split():
+                if lastw == "":
+                    lastw = w
+                    continue
+                if lastw + '_' + w in self.vocabulary:
+                    continue
+                self.vocabulary[lastw + '_' + w] = vocabulary_index
+                vocabulary_index += 1
+                lastw = w
+
         for indexable in objects:
             for word in indexable.words_generator(self.stop_words):
                 if word not in self.vocabulary:
@@ -280,6 +304,7 @@ class Index(object):
             considered during search.
 
         """
+
         for position, indexable in enumerate(objects):
             for word in indexable.words_generator(self.stop_words):
                 # build dictionary where term is the key and an array
@@ -300,7 +325,6 @@ class Index(object):
         docs_indices = []
         num_stop_word = 0
         for term_index, term in enumerate(terms):
-
             # keep only docs that contains all terms
             if term in self.stop_words:
                 num_stop_word += 1
@@ -313,14 +337,16 @@ class Index(object):
             # compute intersection between results
             # there is room for improvements in this part of the code
             docs_with_term = self.term_index[term]
+            #print docs_with_term
             if term_index-num_stop_word == 0:
                 docs_indices = docs_with_term
             else:
                 docs_indices = set(docs_indices) & set(docs_with_term)
-        #print "debuging:docs_indices",list(docs_indices)
+        print "debug info in search_terms",term,":",list(docs_indices)
+
         return list(docs_indices)
 
-        
+
 class SearchEngine(object):
     """Search engine for objects that can be indexed.
 
@@ -356,6 +382,7 @@ class SearchEngine(object):
         Args:
           indexable (Indexable): Object to be added to index.
         """
+        # print indexable
         self.objects.append(indexable)
 
     def start(self):
@@ -392,6 +419,20 @@ class SearchEngine(object):
 
         """
         terms = query.lower().split()
+        dictionary = self.index.term_index.keys()
+        newterms = []
+        if len(terms) > 1:
+            lastt = ""
+            for t in terms:
+                checkSpelling(t, dictionary)
+                if lastt == "":
+                    lastt = t
+                    continue
+                newterms.append(lastt+'_'+t)
+                lastt = t
+            terms = newterms
+        else:
+            checkSpelling(terms[0], dictionary)
         docs_indices = self.index.search_terms(terms)
         search_results = []
 
@@ -407,7 +448,7 @@ class SearchEngine(object):
     def search_bool(self,query,n_results=10):
         """return all documents that satisfy the demand given a bool expression
         Assumptions:
-            1)we take 'and' 'or' 'not' as conjunction word
+            1)we take 'and'_'or'_'not' as conjunction word
         Args:
           query (str): String of bool expression.
           n_results (int): Desired number of results.
@@ -416,7 +457,8 @@ class SearchEngine(object):
           list of  docs indexes
         """
         terms=query.lower().split()
-        #dealing with branket 
+        dictionary = self.index.term_index.keys()
+        #dealing with branket
         for term_index,term in enumerate(terms):
             branket=''
             if (term!='(' and term!=')'):
@@ -429,7 +471,7 @@ class SearchEngine(object):
                 elif (a!=-1 and b!=-1 and a<b):
                     branket='('
                 elif (a!=-1 and b!=-1 and a>b):
-                    branket=')'        
+                    branket=')'
             if branket!='':
                 c_index=term.find(branket)
                 #print c_index
@@ -445,16 +487,56 @@ class SearchEngine(object):
                     terms.insert(term_index,tt[0])
                     terms.insert(term_index+1,branket)
                     terms.insert(term_index+2,tt[1])
-        print "debug info:",terms
-        
-        expRoot=parser(terms).parse()       
-        #docs_indiex = self.index.search_terms(term)
-        #expRoot.printout()       
-        search_results = expRoot.calc(self.index,self.count())
-        return search_results[:n_results]
-   
-        
+        newterms = []
+        if len(terms) > 1:
+            nextt = ""
+            cnt=0
+            first=1
+            for t_index,t in enumerate(terms):
+                checkSpelling(t, dictionary)
+                if t_index+1 < len(terms):
+                    nextt = terms[t_index+1]
+                else:
+                    nextt=""
+                if t!='and' and t!='or'and t!='not'and t!='('and t!=')':
+                    if nextt!='and' and nextt!='or'and nextt!='not'and nextt!='('and nextt!=')' and nextt!="":
+                        if first==0:
+                            newterms.append('and')
+                        newterms.append(t+'_'+nextt)
+                        first=0
+                    else:
+                        if(first!=0):
+                            newterms.append(t)
+                        first=1
+                        
+                        
+                else:
+                    newterms.append(t)
+            
+            terms=newterms
+                #print t_index,terms[t_index]
+        else:
+            checkSpelling(terms[0], dictionary)
+        print "debug info in search_bool:",terms
     
+        expRoot=parser(terms).parse()
+        #docs_indiex = self.index.search_terms(term)
+        search_results = []
+        if expRoot!=None:
+            #expRoot.printout()
+            docs_indices = expRoot.calc(self.index,self.count())
+            
+            for doc_index in docs_indices:
+                indexable = self.objects[doc_index]
+                doc_score = self.rank.compute_rank(doc_index, terms)
+                result = IndexableResult(doc_score, indexable)
+                search_results.append(result)
+
+            search_results.sort(key=lambda x: x.score, reverse=True)
+        return search_results[:n_results]
+
+
+
     def count(self):
         """Return number of objects a
         eady in the index.
@@ -462,58 +544,58 @@ class SearchEngine(object):
           int: Number of documents indexed.
         """
         return len(self.objects)
-depth=0         
+depth=0
 class exprNode(object):
     '''Class of bool expression tree'''
     def __init__(self,value):
         self.op_value=value
         self.leftchild=None
-        self.rightchild=None             
+        self.rightchild=None
     def linkNode(self,left,right):
-        self.leftchild=left 
-        self.rightchild=right 
-        return self  
+        self.leftchild=left
+        self.rightchild=right
+        return self
     def printout(self):
         global depth
         leftnode=self.leftchild
         rightnode=self.rightchild
-        if leftnode!=None:            
+        if leftnode!=None:
             depth=depth-1
-            leftnode.printout()  
+            leftnode.printout()
             depth=depth+1
         print self.op_value,depth
-        if rightnode!=None:            
+        if rightnode!=None:
             depth=depth-1
             rightnode.printout()
             depth=depth+1
-             
+
         #if leftres==None and rightres==None:
-        #    print self.op_value,depth      
+        #    print self.op_value,depth
     def calc(self,index,docs_num):
-    '''calculate the docs indexes according to bool expression tree'''
+    # '''calculate the docs indexes according to bool expression tree'''
         leftnode=self.leftchild
         rightnode=self.rightchild
         if self.op_value=='and':
-            
+
             leftdocs_indices=self.leftchild.calc(index,docs_num)
             rightdocs_indices=self.rightchild.calc(index,docs_num)
             res=set(leftdocs_indices) & set(rightdocs_indices)
-                    
+
             return list(res)
-        elif self.op_value=='or': 
+        elif self.op_value=='or':
             leftdocs_indices=self.leftchild.calc(index,docs_num)
             rightdocs_indices=self.rightchild.calc(index,docs_num)
             res=set(leftdocs_indices)| set(rightdocs_indices)
             return list(res)
-        elif self.op_value=='not':          
+        elif self.op_value=='not':
             leftdocs_indices=range(docs_num)
             rightdocs_indices=self.rightchild.calc(index,docs_num)
             res=set(leftdocs_indices)- set(rightdocs_indices)
-                
+
             return list(res)
         else:
             res=index.search_terms(self.op_value.split())
-            print "debug info:",self.op_value.split(),res
+            #print "debug info:",self.op_value.split(),res
             return res
 class parser(object):
     '''parse bool expression'''
@@ -524,14 +606,16 @@ class parser(object):
     def parse(self):
         return self.exp()
     def match(self,expectedToken):
-        token=self.terms[self.i]
-        if token==expectedToken:
-            self.i=self.i+1
-            if(self.i!=len(self.terms)):
-                self.token=self.terms[self.i]
-            return exprNode(token)
-        else:
+        #token=self.terms[self.i]
+        if self.token==expectedToken:           
+            res= exprNode( self.token)
+        else:           
             print 'systax error error',token
+            res=None
+        self.i=self.i+1
+        if(self.i<len(self.terms)):
+            self.token=self.terms[self.i]
+        return res
     def factor(self):
         if(self.token=='not'):
             op=self.match('not')
@@ -549,24 +633,27 @@ class parser(object):
             return self.words()
     def words(self):
         tokenlist=[]
-        while(self.token!='(' and self.token !=')' and self.token !='and' and self.token != 'or' and self.token!='not'):
+        if(self.token!='(' and self.token !=')' and self.token !='and' and self.token != 'or' and self.token!='not'):
             '''for single word'''
-            return self.match(self.token)#one words 
+            return self.match(self.token)#one words
+        else:
+            print "syntax error",self.token
+            return ""
             '''for multiple words query
-            tokenlist.append(self.token) 
+            tokenlist.append(self.token)
             self.match(self.token)
-        return exprNode(tokenlist)'''           
+        return exprNode(tokenlist)'''
     def term(self):
         left=self.factor()
         while self.token=='and':
-            op=self.match(self.token )
+            op=self.match('and' )
             right=self.factor()
-            left=op.linkNode(left, right)  
-        return left          
+            left=op.linkNode(left, right)
+        return left
     def exp(self):
         left=self.term()
         while(self.token=='or'):
-            op=self.match(self.token)
+            op=self.match('or')
             right=self.term()
             left=op.linkNode(left, right)
-        return left                
+        return left
